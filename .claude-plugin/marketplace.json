@@ -1,0 +1,5 @@
+{
+  "name": "claude-mods",
+  "owner": { "name": "AieatAssam" },
+  "plugins": [{ "name": "context-meter", "source": "./context-meter", "description": "Coloured usage band above the prompt: model, context vs auto-compact, rate limits, cost, turns, live subagents" }]
+}
