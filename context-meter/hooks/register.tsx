@@ -18,6 +18,30 @@ const AGENT_ICON: Record<AgentRow['state'], string> = { running: '●', waiting:
 const AGENT_COLOR: Record<AgentRow['state'], string> = { running: 'suggestion', waiting: 'warning', done: 'success', failed: 'error' }
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
+type Seg = [color: string, text: string]
+const legendLines = (model: string): Seg[][] => [
+  [['claude', model], ['subtle', '  model running this session']],
+  [['success', '━━─'], ['subtle', " context: last request's tokens / auto-compact point (model window if auto-compact is off); "], ['success', 'green'], ['subtle', ' <60%, '], ['warning', 'amber'], ['subtle', ' <80%, '], ['error', 'red'], ['subtle', ' → /compact']],
+  [['ide', '5h / 7d'], ['subtle', "  plan's 5-hour and weekly rate limit used; ↻ time until reset"]],
+  [['merged', '$'], ['subtle', '  session cost so far, as /cost totals it']],
+  [['suggestion', '↵'], ['subtle', '  prompts sent'], ['subtle', '   s · ⚒  last turn: time, tool calls']],
+  [['subtle', 'subagents: '], ['suggestion', '● running'], ['subtle', ', '], ['warning', '◌ waiting'], ['subtle', ', '], ['success', '✓ done'], ['subtle', ', '], ['error', '✗ failed'], ['subtle', '; type, model, task, ◔ context vs its window, time · tools']],
+]
+
+/** The legend lines that fit with line 1 inside the band's maxRows, so the band never scrolls ⓘ away. */
+const fitLegend = (model: string, maxRows: number, columns: number, below: number): Seg[][] => {
+  const inner = Math.max(10, columns - 4) // border + padding
+  let budget = maxRows - 2 /* border */ - 2 /* line 1, wrapped at worst */ - below /* subagent rows */
+  const out: Seg[][] = []
+  for (const l of legendLines(model)) {
+    const rows = Math.ceil(l.reduce((n, [, t]) => n + t.length, 0) / inner)
+    if (rows > budget) break
+    budget -= rows
+    out.push(l)
+  }
+  return out
+}
+
 const snapAtom = atom({ plugin: 'context-meter', key: 'snap' } as const, null)
 const legendAtom = atom({ plugin: 'context-meter', key: 'legend' } as const, false)
 
@@ -201,7 +225,7 @@ export const register: Register = on => {
   on('agent.spawn', async ($, e, next) => {
     const r = await next(e)
     if (r.agentId) {
-      seen.set(r.agentId, { model: r.model, startedAt: await $.clock.now(), tools: 0 })
+      seen.set(r.agentId, { model: r.model ?? '', startedAt: await $.clock.now(), tools: 0 })
       await refresh($)
     }
     return r
@@ -209,6 +233,12 @@ export const register: Register = on => {
 
   // Each model request: a subagent's input size is its context; the main thread's is kept live for the bar.
   on('turn.step', async function* ($, e, next) {
+    if (e.agentId) {
+      // The spawn may name no model (inherited), or predate a reload: each request names the one it runs on.
+      const t = seen.get(e.agentId)
+      if (t) t.model = e.model || t.model
+      else seen.set(e.agentId, { model: e.model, startedAt: await $.clock.now(), tools: 0 })
+    }
     const r = yield* next(e)
     if (r.usage) {
       const input = r.usage.input_tokens + r.usage.cache_read_input_tokens + r.usage.cache_creation_input_tokens
@@ -271,32 +301,17 @@ export const register: Register = on => {
     const pointer = e.surface === 'terminal' || e.surface === 'desktop'
     const meter = bar(s.ctx?.pct ?? 0)
     const lvl = s.ctx ? level(s.ctx.pct) : 'subtle'
+    const card = legend ? fitLegend(s.model, e.props.maxRows, e.props.bodyColumns, s.agents?.length ?? 0) : []
 
     return (
       <Box key="meter" flexDirection="column">
         {/* The legend sits above line 1: the band is pinned to the prompt, so it grows upward and ⓘ stays put. */}
-        {legend ? (
+        {/* The band scrolls past maxRows, which would push ⓘ out from under the pointer: the card takes only what fits. */}
+        {card.length ? (
           <Box key="legend-card" flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
-            <Text><Text color="claude" bold>{s.model}</Text><Text color="subtle">  model running this session</Text></Text>
-            <Text>
-              <Text color="success">━━─</Text>
-              <Text color="subtle"> context used: last request's tokens / auto-compact point (or model window when auto-compact is off). </Text>
-              <Text color="success">green</Text><Text color="subtle"> &lt;60%, </Text>
-              <Text color="warning">amber</Text><Text color="subtle"> &lt;80%, </Text>
-              <Text color="error">red</Text><Text color="subtle"> → /compact or fresh session</Text>
-            </Text>
-            <Text><Text color="ide">5h / 7d</Text><Text color="subtle">  share of your plan's 5-hour and weekly rate limit used; ↻ time until it resets</Text></Text>
-            <Text><Text color="merged">$</Text><Text color="subtle">  session cost so far, as /cost totals it (a resumed session counts from its first launch)</Text></Text>
-            <Text><Text color="suggestion">↵</Text><Text color="subtle">  prompts you've sent this session</Text></Text>
-            <Text color="subtle">s · ⚒  how long the last turn took, and how many tool calls it made</Text>
-            <Text>
-              <Text color="subtle">⑂ subagents: </Text>
-              <Text color="suggestion">● running</Text><Text color="subtle">, </Text>
-              <Text color="warning">◌ waiting</Text><Text color="subtle">, </Text>
-              <Text color="success">✓ done</Text><Text color="subtle">, </Text>
-              <Text color="error">✗ failed</Text>
-              <Text color="subtle">; type·model, task, ◔ its context (green/amber/red vs its model's window: 200k, or 1M for [1m] models), time running · tool calls. Finished ones stay 2 min.</Text>
-            </Text>
+            {card.map((segs, i) => (
+              <Text key={`l${i}`}>{segs.map(([c, t], j) => <Text key={`s${j}`} color={c} bold={c === 'claude'}>{t}</Text>)}</Text>
+            ))}
           </Box>
         ) : null}
         <Box key="line" flexDirection="row" flexWrap="wrap" gap={2}>

@@ -17,7 +17,7 @@ function setup(on: On) {
   return mock.clock(on, { now: 0 })
 }
 
-const band = { plugin: 'context-meter', component: 'AbovePrompt', props: { hasSurvey: false } } as const
+const band = { plugin: 'context-meter', component: 'AbovePrompt', props: { hasSurvey: false, maxRows: 40, bodyColumns: 120 } } as const
 
 test('band draws coloured meter and subagents on every surface', async ($, on) => {
   setup(on)
@@ -40,7 +40,7 @@ test('legend opens after a 700ms hover on ⓘ and closes when the pointer leaves
   const clock = setup(on)
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   const ui = (await $.ui.mount({ ...band, surface: 'terminal' } as never)) as Mounted<'terminal'>
-  const legend = () => ui.find({ type: 'Text', text: /context used/ })
+  const legend = () => ui.find({ type: 'Text', text: /model running/ })
   expect(await legend()).toBeFalsy()
   await ui.pointer({ type: 'enter', x: 0, y: 0, in: 'legend-trigger' })
   await clock.advance(300)
@@ -63,11 +63,22 @@ test('mobile ? button toggles the legend', async ($, on) => {
   setup(on)
   await $.session.start({ cwd: '/', surface: 'mobile', isInteractive: true })
   const ui = await $.ui.mount({ ...band, surface: 'mobile' } as never)
-  const legend = () => ui.find({ type: 'Text', text: /context used/ })
+  const legend = () => ui.find({ type: 'Text', text: /model running/ })
   expect(await legend()).toBeFalsy()
   await ui.press({ key: 'legend' })
   expect(await legend()).toBeTruthy()
   await ui.press({ key: 'legend' })
   expect(await legend()).toBeFalsy()
+  await ui.unmount()
+})
+
+test('legend never makes the band taller than maxRows, so ⓘ is not scrolled away', async ($, on) => {
+  setup(on)
+  await $.session.start({ cwd: '/', surface: 'mobile', isInteractive: true })
+  const ui = await $.ui.mount({ ...band, props: { ...band.props, maxRows: 8 }, surface: 'mobile' } as never)
+  await ui.press({ key: 'legend' })
+  expect(await ui.find({ type: 'Text', text: /model running/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /5-hour/ })).toBeFalsy() // 8 rows: border 2, line 1 2, subagents 2 → 2 left
+  expect(await ui.find({ type: 'Text', text: /Scan transcripts/ })).toBeTruthy()
   await ui.unmount()
 })
