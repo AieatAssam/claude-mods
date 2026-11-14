@@ -1,6 +1,7 @@
 export type Snap = {
   model: string
-  ctx: { pct: number; tokens: number; window: number } | null
+  /** basis: 'autocompact' when measured against the auto-compact point, 'window' when against the model window */
+  ctx: { pct: number; tokens: number; window: number; basis: 'autocompact' | 'window' } | null
   window: number
   limits: { name: string; pct: number; reset: string }[]
   usd: number | null
@@ -18,12 +19,14 @@ export type AgentRow = {
   tools: number
   /** input tokens on its latest model request; 0 before the first */
   ctx: number
+  /** the window its ctx is measured against: 200k, or 1M for a [1m] model */
+  window: number
   /** running | waiting | done | failed */
   state: 'running' | 'waiting' | 'done' | 'failed'
 }
 
 declare module 'claude-code' {
   interface PluginState {
-    'context-meter': { snap: Snap | null }
+    'context-meter': { snap: Snap | null; legend: boolean }
   }
 }

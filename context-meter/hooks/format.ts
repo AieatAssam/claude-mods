@@ -2,6 +2,9 @@ import type { AgentInfo, SessionUsage } from 'claude-code'
 import type { AgentRow, Snap } from '../types'
 
 export type Tracked = { model: string; startedAt: number; endedAt?: number; tools: number; ctx?: number }
+export type Usage = Omit<SessionUsage, 'startedAt'>
+/** Auto-compaction facts from /context's breakdown, cached per model. */
+export type Cut = { autoCompactThreshold?: number; isAutoCompactEnabled?: boolean }
 
 export const dur = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}` : s >= 60 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}` : `${s}s`)
 
@@ -9,6 +12,9 @@ const STATE: Record<AgentInfo['status'], AgentRow['state']> = {
   pending: 'running', running: 'running', waiting: 'waiting', idle: 'waiting',
   completed: 'done', failed: 'failed', killed: 'failed',
 }
+
+/** A subagent's window: 1M when its model string says [1m], else 200k. */
+export const subagentWindow = (rawModel: string) => (/\[1m\]/i.test(rawModel) ? 1_000_000 : 200_000)
 
 /** Agents from $.agent.list(), enriched with what the spawn/tool hooks saw. Finished ones linger 2 min. */
 export const agentRows = (list: AgentInfo[], seen: Map<string, Tracked>, now: number): AgentRow[] =>
@@ -25,18 +31,23 @@ export const agentRows = (list: AgentInfo[], seen: Map<string, Tracked>, now: nu
       seconds: t ? Math.max(0, Math.round((end - t.startedAt) / 1000)) : 0,
       tools: t?.tools ?? 0,
       ctx: t?.ctx ?? 0,
+      window: subagentWindow(t?.model ?? ''),
       state,
     }]
   })
 
 export type Last = { seconds: number; tools: number } | null
 
-export const bar = (pct: number, width = 10) => {
+/** Filled and empty parts as two spans of one glyph width, so the empty part can be drawn dim. */
+export const bar = (pct: number, width = 8) => {
   const filled = Math.max(0, Math.min(width, Math.round((pct / 100) * width)))
-  return '▰'.repeat(filled) + '▱'.repeat(width - filled)
+  return { on: '━'.repeat(filled), off: '─'.repeat(width - filled) }
 }
 
 export const k = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`)
+
+/** Under a cent reads "<$0.01", so a real but tiny cost never shows as $0.00. */
+export const money = (usd: number) => (usd < 0.01 && usd > 0 ? '<$0.01' : `$${usd.toFixed(2)}`)
 
 export const until = (iso: string | undefined, now: number) => {
   const ms = iso ? Date.parse(iso) - now : NaN
@@ -54,21 +65,24 @@ const LIMIT_NAME: Record<string, string> = { five_hour: '5h', seven_day: '7d', s
 // "claude-opus-5-5[1m]" / "Opus 5.5" → "opus-5-5"
 export const shortModel = (m: string) => m.toLowerCase().replace(/^claude-/, '').replace(/[ .]/g, '-').replace(/\[.*\]$/, '')
 
-/** The token count to measure against: where auto-compact fires, else the compaction window, else the model window. */
-export const limitOf = (u: Omit<SessionUsage, 'startedAt'>) =>
-  u.context.breakdown?.autoCompactThreshold ?? u.context.breakdown?.rawMaxTokens ?? u.context.window
+/** What the bar measures against: the auto-compact point while auto-compaction is on, else the model window. */
+export const limitOf = (window: number, cut?: Cut): { max: number; basis: 'autocompact' | 'window' } =>
+  cut?.isAutoCompactEnabled && cut.autoCompactThreshold
+    ? { max: cut.autoCompactThreshold, basis: 'autocompact' }
+    : { max: window, basis: 'window' }
 
-export const snap = (u: Omit<SessionUsage, 'startedAt'>, model: string, turns: number, last: Last, now: number, agents: AgentRow[] = []): Snap => {
-  const max = limitOf(u)
-  const { tokens } = u.context
+/** `live`, when set, replaces the usage's token count (the main thread's last request, seen mid-turn). */
+export const snap = (u: Usage, model: string, turns: number, last: Last, now: number, agents: AgentRow[] = [], cut?: Cut, live?: number): Snap => {
+  const { max, basis } = limitOf(u.context.window, cut)
+  const tokens = live ?? u.context.tokens
   return {
-  agents,
-  model: shortModel(model),
-  ctx: tokens === undefined ? null : { pct: Math.round((tokens / max) * 100), tokens, window: max },
-  window: max,
-  limits: u.rateLimits.map(r => ({ name: LIMIT_NAME[r.kind] ?? r.kind, pct: Math.round(r.percentUsed), reset: until(r.resetsAt, now) })),
-  usd: u.cost?.usd ?? null,
-  turns,
-  last,
+    agents,
+    model: shortModel(model),
+    ctx: tokens === undefined ? null : { pct: Math.round((tokens / max) * 100), tokens, window: max, basis },
+    window: max,
+    limits: u.rateLimits.map(r => ({ name: LIMIT_NAME[r.kind] ?? r.kind, pct: Math.round(r.percentUsed), reset: until(r.resetsAt, now) })),
+    usd: u.cost?.usd ?? null,
+    turns,
+    last,
   }
 }
