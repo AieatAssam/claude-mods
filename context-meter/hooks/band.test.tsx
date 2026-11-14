@@ -47,7 +47,14 @@ test('legend opens after a 700ms hover on ⓘ and closes when the pointer leaves
   expect(await legend()).toBeFalsy() // a pass over ⓘ is not a hover
   await clock.advance(400)
   expect(await legend()).toBeTruthy()
+  // a brief leave/enter (the card reflowing under the pointer) keeps it open
   await ui.pointer({ type: 'leave', x: 0, y: 0, in: 'legend-trigger' })
+  await clock.advance(100)
+  await ui.pointer({ type: 'enter', x: 0, y: 0, in: 'legend-trigger' })
+  await clock.advance(500)
+  expect(await legend()).toBeTruthy()
+  await ui.pointer({ type: 'leave', x: 0, y: 0, in: 'legend-trigger' })
+  await clock.advance(300)
   expect(await legend()).toBeFalsy()
   await ui.unmount()
 })

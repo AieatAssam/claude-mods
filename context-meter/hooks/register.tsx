@@ -9,6 +9,7 @@ const LIMIT_WARN = 80
 const TICK_MS = 5000 // redraws ↻ countdowns and live subagent times
 const STALE_MS = 30_000 // with nothing running, still refresh this often
 const LEGEND_DELAY_MS = 700 // a pointer just passing over ⓘ must not open the legend
+const LEGEND_HIDE_MS = 300 // leaving ⓘ for a moment (a redraw, a twitch) must not close it
 const FOLLOW_UP_MS = 1500 // the cost ledger can lag a subagent's turn.complete
 const PLACEHOLDER_WINDOW = 200_000
 const LEGEND_KEY = 'legend-trigger'
@@ -35,6 +36,7 @@ let lastRefresh = 0
 let tick: Timer | undefined
 let followUp: Timer | undefined
 let legendTimer: Timer | undefined
+let legendHide: Timer | undefined
 
 const pickCut = (b?: { autoCompactThreshold?: number; isAutoCompactEnabled: boolean }): Cut =>
   b ? { autoCompactThreshold: b.autoCompactThreshold, isAutoCompactEnabled: b.isAutoCompactEnabled } : {}
@@ -146,8 +148,10 @@ export const register: Register = on => {
     const r = await next(e)
     followUp?.cancel()
     legendTimer?.cancel()
+    legendHide?.cancel()
     followUp = undefined
     legendTimer = undefined
+    legendHide = undefined
     seen.clear()
     warned.clear()
     last = null
@@ -242,10 +246,16 @@ export const register: Register = on => {
   // The ⓘ on Client surfaces: open the legend only after a short hover.
   on('ui.message', ($, e, next) => {
     if (e.element === LEGEND_KEY) {
-      legendTimer?.cancel()
-      legendTimer = undefined
-      if (e.data === 'enter') legendTimer = $.clock.after(LEGEND_DELAY_MS, () => void setLegend($, true))
-      else if (e.data === 'leave') void setLegend($, false)
+      if (e.data === 'enter') {
+        legendHide?.cancel()
+        legendHide = undefined
+        legendTimer ??= $.clock.after(LEGEND_DELAY_MS, () => void setLegend($, true))
+      } else if (e.data === 'leave') {
+        legendTimer?.cancel()
+        legendTimer = undefined
+        legendHide?.cancel()
+        legendHide = $.clock.after(LEGEND_HIDE_MS, () => void setLegend($, false))
+      }
     }
     return next(e)
   })
@@ -264,6 +274,31 @@ export const register: Register = on => {
 
     return (
       <Box key="meter" flexDirection="column">
+        {/* The legend sits above line 1: the band is pinned to the prompt, so it grows upward and ⓘ stays put. */}
+        {legend ? (
+          <Box key="legend-card" flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
+            <Text><Text color="claude" bold>{s.model}</Text><Text color="subtle">  model running this session</Text></Text>
+            <Text>
+              <Text color="success">━━─</Text>
+              <Text color="subtle"> context used: last request's tokens / auto-compact point (or model window when auto-compact is off). </Text>
+              <Text color="success">green</Text><Text color="subtle"> &lt;60%, </Text>
+              <Text color="warning">amber</Text><Text color="subtle"> &lt;80%, </Text>
+              <Text color="error">red</Text><Text color="subtle"> → /compact or fresh session</Text>
+            </Text>
+            <Text><Text color="ide">5h / 7d</Text><Text color="subtle">  share of your plan's 5-hour and weekly rate limit used; ↻ time until it resets</Text></Text>
+            <Text><Text color="merged">$</Text><Text color="subtle">  session cost so far, as /cost totals it (a resumed session counts from its first launch)</Text></Text>
+            <Text><Text color="suggestion">↵</Text><Text color="subtle">  prompts you've sent this session</Text></Text>
+            <Text color="subtle">s · ⚒  how long the last turn took, and how many tool calls it made</Text>
+            <Text>
+              <Text color="subtle">⑂ subagents: </Text>
+              <Text color="suggestion">● running</Text><Text color="subtle">, </Text>
+              <Text color="warning">◌ waiting</Text><Text color="subtle">, </Text>
+              <Text color="success">✓ done</Text><Text color="subtle">, </Text>
+              <Text color="error">✗ failed</Text>
+              <Text color="subtle">; type·model, task, ◔ its context (green/amber/red vs its model's window: 200k, or 1M for [1m] models), time running · tool calls. Finished ones stay 2 min.</Text>
+            </Text>
+          </Box>
+        ) : null}
         <Box key="line" flexDirection="row" flexWrap="wrap" gap={2}>
           <Text color="claude" bold>{s.model}</Text>
           {s.ctx ? (
@@ -312,30 +347,6 @@ export const register: Register = on => {
                 </Box>
               )
             })}
-          </Box>
-        ) : null}
-        {legend ? (
-          <Box key="legend-card" flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
-            <Text><Text color="claude" bold>{s.model}</Text><Text color="subtle">  model running this session</Text></Text>
-            <Text>
-              <Text color="success">━━─</Text>
-              <Text color="subtle"> context used: last request's tokens / auto-compact point (or model window when auto-compact is off). </Text>
-              <Text color="success">green</Text><Text color="subtle"> &lt;60%, </Text>
-              <Text color="warning">amber</Text><Text color="subtle"> &lt;80%, </Text>
-              <Text color="error">red</Text><Text color="subtle"> → /compact or fresh session</Text>
-            </Text>
-            <Text><Text color="ide">5h / 7d</Text><Text color="subtle">  share of your plan's 5-hour and weekly rate limit used; ↻ time until it resets</Text></Text>
-            <Text><Text color="merged">$</Text><Text color="subtle">  session cost so far, as /cost totals it (a resumed session counts from its first launch)</Text></Text>
-            <Text><Text color="suggestion">↵</Text><Text color="subtle">  prompts you've sent this session</Text></Text>
-            <Text color="subtle">s · ⚒  how long the last turn took, and how many tool calls it made</Text>
-            <Text>
-              <Text color="subtle">⑂ subagents: </Text>
-              <Text color="suggestion">● running</Text><Text color="subtle">, </Text>
-              <Text color="warning">◌ waiting</Text><Text color="subtle">, </Text>
-              <Text color="success">✓ done</Text><Text color="subtle">, </Text>
-              <Text color="error">✗ failed</Text>
-              <Text color="subtle">; type·model, task, ◔ its context (green/amber/red vs its model's window: 200k, or 1M for [1m] models), time running · tool calls. Finished ones stay 2 min.</Text>
-            </Text>
           </Box>
         ) : null}
       </Box>
