@@ -18,7 +18,7 @@ Rest the pointer on **ⓘ** for about 0.7 seconds to see what each number means;
 - **5h / 7d**: plan rate-limit usage, ↻ time until reset (kept fresh every 30s).
 - **$**: session cost as `/cost` totals it (`<$0.01` for tiny amounts; a resumed session counts from its first launch).
 - **↵** prompts sent · **s · ⚒** last turn's duration and tool calls.
-- **Subagents**, one per line: ● running, ◌ waiting, ✓ done, ✗ failed; type, model, task, ◔ context vs its model's window (200k, or 1M for `[1m]` models), time, tool calls. Finished ones stay 2 min.
+- **Subagents**, one aligned row each: ● running, ◌ waiting, ✓ done, ✗ failed; type, model, task (as much as fits), ◔ context vs its model's window (200k, or 1M for `[1m]` models), ≈ estimated cost (its requests' tokens at list price), time, tool calls. Finished ones stay 2 min.
 - Refreshes on model switch, compaction, `/clear`, settings changes and every turn. Narrow windows drop the less important parts.
 - Toasts at 60% / 80% context and 80% rate limit.
 

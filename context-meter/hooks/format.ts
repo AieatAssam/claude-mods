@@ -1,7 +1,7 @@
 import type { AgentInfo, SessionUsage } from 'claude-code'
 import type { AgentRow, Snap } from '../types'
 
-export type Tracked = { model: string; startedAt: number; endedAt?: number; tools: number; ctx?: number }
+export type Tracked = { model: string; startedAt: number; endedAt?: number; tools: number; ctx?: number; usd?: number }
 export type Usage = Omit<SessionUsage, 'startedAt'>
 /** Auto-compaction facts from /context's breakdown, cached per model. */
 export type Cut = { autoCompactThreshold?: number; isAutoCompactEnabled?: boolean }
@@ -11,6 +11,26 @@ export const dur = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)}h${String
 const STATE: Record<AgentInfo['status'], AgentRow['state']> = {
   pending: 'running', running: 'running', waiting: 'waiting', idle: 'waiting',
   completed: 'done', failed: 'failed', killed: 'failed',
+}
+
+// ponytail: list prices per MTok (cached 2026-11), by family; update when prices change.
+// [input, output, cache read]; cache writes bill at 1.25x input (5-minute TTL).
+const PRICES: [RegExp, number, number, number][] = [
+  [/fable|mythos/i, 8, 40, 0.2],
+  [/opus/i, 4, 20, 0.2],
+  [/sonnet/i, 2, 10, 0.1],
+  [/haiku/i, 0.1, 0.5, 0.01],
+]
+type Tokens = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
+
+/** One request's cost at list price; 0 for a model we have no price for. Haiku 5.5 prompts over 100k bill 5x. */
+export const requestUsd = (model: string, u: Tokens) => {
+  const p = PRICES.find(([re]) => re.test(model))
+  if (!p) return 0
+  const prompt = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
+  const x = /haiku/i.test(model) && prompt > 100_000 ? 5 : 1
+  const [, inp, out, read] = p
+  return (x * (u.input_tokens * inp + u.cache_creation_input_tokens * inp * 1.25 + u.cache_read_input_tokens * read + u.output_tokens * out)) / 1e6
 }
 
 /** A subagent's window: 1M when its model string says [1m], else 200k. */
@@ -32,6 +52,7 @@ export const agentRows = (list: AgentInfo[], seen: Map<string, Tracked>, now: nu
       tools: t?.tools ?? 0,
       ctx: t?.ctx ?? 0,
       window: subagentWindow(t?.model ?? ''),
+      usd: t?.usd ?? 0,
       state,
     }]
   })

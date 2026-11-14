@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { agentRows, bar, dur, level, limitOf, money, shortModel, snap, subagentWindow, until } from './format'
+import { agentRows, bar, dur, level, limitOf, money, shortModel, snap, subagentWindow, until, requestUsd } from "./format"
 
 const NOW = Date.parse('2026-11-08T12:00:00Z')
 
@@ -46,8 +46,8 @@ test('agent rows: tracked model/time/tools/window, finished ones expire', async 
     { id: 'a3', type: 'general-purpose', description: 'Untracked', status: 'killed' },
   ], seen, NOW)
   expect(rows).toEqual([
-    { id: 'a1', type: 'Explore', description: 'Scan', model: 'haiku-5-5', seconds: 80, tools: 14, ctx: 0, window: 200_000, state: 'running' },
-    { id: 'a3', type: 'general-purpose', description: 'Untracked', model: '', seconds: 0, tools: 0, ctx: 0, window: 200_000, state: 'failed' },
+    { id: 'a1', type: 'Explore', description: 'Scan', model: 'haiku-5-5', seconds: 80, tools: 14, ctx: 0, window: 200_000, usd: 0, state: 'running' },
+    { id: 'a3', type: 'general-purpose', description: 'Untracked', model: '', seconds: 0, tools: 0, ctx: 0, window: 200_000, usd: 0, state: 'failed' },
   ])
 })
 
@@ -64,4 +64,13 @@ test('bar measures against the auto-compact point while it is on, the window whe
 test('live main-thread count overrides the usage tokens', async () => {
   const u = { context: { tokens: 150_000, window: 1_000_000, percent: 15 }, rateLimits: [] } as never
   expect(snap(u, 'opus', 1, null, NOW, [], undefined, 90_000).ctx?.tokens).toBe(90_000)
+})
+
+test('subagent cost: list price per request, haiku long prompts at 5x, unknown models free', () => {
+  const u = { input_tokens: 1_000_000, output_tokens: 1_000_000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  expect(Math.round(requestUsd('claude-opus-5-5', u) * 1e4) / 1e4).toBe(24)
+  expect(Math.round(requestUsd('claude-haiku-5-5', { ...u, input_tokens: 50_000, output_tokens: 0 }) * 1e4) / 1e4).toBe(0.005)
+  expect(Math.round(requestUsd('claude-haiku-5-5', { ...u, input_tokens: 200_000, output_tokens: 0 }) * 1e4) / 1e4).toBe(0.1)
+  expect(Math.round(requestUsd('claude-sonnet-5-5', { ...u, input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1_000_000 }) * 1e4) / 1e4).toBe(0.1)
+  expect(requestUsd('gpt', u)).toBe(0)
 })

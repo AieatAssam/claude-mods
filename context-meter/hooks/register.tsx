@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionUsage, Timer } from 'claude-code'
-import { agentRows, bar, dur, k, level, money, snap, shortModel, type Cut, type Last, type Tracked } from './format'
+import { agentRows, bar, dur, k, level, money, requestUsd, snap, shortModel, type Cut, type Last, type Tracked } from './format'
 import type { AgentRow } from '../types'
 
 // ponytail: thresholds hardcoded; make them userConfig options if you want to tune them.
@@ -16,7 +16,6 @@ const LEGEND_KEY = 'legend-trigger'
 
 const AGENT_ICON: Record<AgentRow['state'], string> = { running: '●', waiting: '◌', done: '✓', failed: '✗' }
 const AGENT_COLOR: Record<AgentRow['state'], string> = { running: 'suggestion', waiting: 'warning', done: 'success', failed: 'error' }
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
 type Seg = [color: string, text: string]
 const legendLines = (model: string): Seg[][] => [
@@ -25,7 +24,7 @@ const legendLines = (model: string): Seg[][] => [
   [['ide', '5h / 7d'], ['subtle', "  plan's 5-hour and weekly rate limit used; ↻ time until reset"]],
   [['merged', '$'], ['subtle', '  session cost so far, as /cost totals it']],
   [['suggestion', '↵'], ['subtle', '  prompts sent'], ['subtle', '   s · ⚒  last turn: time, tool calls']],
-  [['subtle', 'subagents: '], ['suggestion', '● running'], ['subtle', ', '], ['warning', '◌ waiting'], ['subtle', ', '], ['success', '✓ done'], ['subtle', ', '], ['error', '✗ failed'], ['subtle', '; type, model, task, ◔ context vs its window, time · tools']],
+  [['subtle', 'subagents: '], ['suggestion', '● running'], ['subtle', ', '], ['warning', '◌ waiting'], ['subtle', ', '], ['success', '✓ done'], ['subtle', ', '], ['error', '✗ failed'], ['subtle', '; type, model, task, ◔ context vs its window, ≈ est. cost, time, tools']],
 ]
 
 /** The legend lines that fit with line 1 inside the band's maxRows, so the band never scrolls ⓘ away. */
@@ -243,7 +242,10 @@ export const register: Register = on => {
     if (r.usage) {
       const input = r.usage.input_tokens + r.usage.cache_read_input_tokens + r.usage.cache_creation_input_tokens
       const t = e.agentId ? seen.get(e.agentId) : undefined
-      if (t) t.ctx = input
+      if (t) {
+        t.ctx = input
+        t.usd = (t.usd ?? 0) + requestUsd(e.model || t.model, r.usage)
+      }
       if (!e.agentId) {
         mainCtx = input
         void refresh($)
@@ -301,6 +303,9 @@ export const register: Register = on => {
     const pointer = e.surface === 'terminal' || e.surface === 'desktop'
     const meter = bar(s.ctx?.pct ?? 0)
     const lvl = s.ctx ? level(s.ctx.pct) : 'subtle'
+    const agents = s.agents ?? []
+    const typeW = Math.min(16, Math.max(0, ...agents.map(a => a.type.length)))
+    const modelW = Math.min(14, Math.max(1, ...agents.map(a => a.model.length)))
     const card = legend ? fitLegend(s.model, e.props.maxRows, e.props.bodyColumns, s.agents?.length ?? 0) : []
 
     return (
@@ -314,7 +319,8 @@ export const register: Register = on => {
             ))}
           </Box>
         ) : null}
-        <Box key="line" flexDirection="row" flexWrap="wrap" gap={2}>
+        <Box key="line" flexDirection="row" justifyContent="space-between" gap={2}>
+          <Box key="stats" flexDirection="row" flexWrap="wrap" flexShrink={1} gap={2}>
           <Text color="claude" bold>{s.model}</Text>
           {s.ctx ? (
             <Box key="ctx" flexDirection="row" gap={1}>
@@ -341,6 +347,7 @@ export const register: Register = on => {
           {s.usd !== null ? <Text color="merged">{money(s.usd)}</Text> : null}
           <Text color="suggestion">{s.turns}↵</Text>
           {s.last ? <Text color="subtle">{s.last.seconds}s{narrow ? '' : ` · ${s.last.tools}⚒`}</Text> : null}
+          </Box>
           {pointer && Client ? (
             <Client key={LEGEND_KEY} module="./legend-trigger.tsx" />
           ) : (
@@ -348,17 +355,22 @@ export const register: Register = on => {
           )}
         </Box>
         {s.agents?.length ? (
+          // A table: name columns sized to the widest row, the task takes what is left, numbers right-aligned.
           <Box key="agents" flexDirection="column">
             {s.agents.map(a => {
               const done = a.state === 'done' || a.state === 'failed'
               return (
                 <Box key={a.id} flexDirection="row" gap={1}>
                   <Text color={AGENT_COLOR[a.state]}>{AGENT_ICON[a.state]}</Text>
-                  <Text color="ide" dimColor={done}>{a.type}</Text>
-                  {a.model ? <Text color="claude" dimColor={done}>{a.model}</Text> : null}
-                  <Text wrap="truncate-end" color={a.state === 'running' ? 'text' : 'subtle'} dimColor={done}>{clip(a.description, narrow ? 16 : 32)}</Text>
-                  {a.ctx ? <Text color={level((a.ctx / a.window) * 100)}>◔{k(a.ctx)}</Text> : null}
-                  <Text color="subtle">{dur(a.seconds)}{narrow || !a.tools ? '' : ` · ${a.tools}⚒`}</Text>
+                  {narrow ? null : <Box width={typeW}><Text color="ide" dimColor={done} wrap="truncate-end">{a.type}</Text></Box>}
+                  <Box width={modelW}><Text color="claude" dimColor={done} wrap="truncate-end">{a.model || '…'}</Text></Box>
+                  <Box flexGrow={1} flexShrink={1} minWidth={8}>
+                    <Text wrap="truncate-end" color={a.state === 'running' ? 'text' : 'subtle'} dimColor={done}>{a.description}</Text>
+                  </Box>
+                  <Box width={6} justifyContent="flex-end">{a.ctx ? <Text color={level((a.ctx / a.window) * 100)}>◔{k(a.ctx)}</Text> : null}</Box>
+                  <Box width={7} justifyContent="flex-end">{a.usd ? <Text color="merged">≈{money(a.usd)}</Text> : null}</Box>
+                  <Box width={5} justifyContent="flex-end"><Text color="subtle">{dur(a.seconds)}</Text></Box>
+                  {narrow ? null : <Box width={4} justifyContent="flex-end"><Text color="subtle">{a.tools ? `${a.tools}⚒` : ''}</Text></Box>}
                 </Box>
               )
             })}

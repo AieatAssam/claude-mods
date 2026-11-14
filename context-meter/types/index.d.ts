@@ -21,6 +21,8 @@ export type AgentRow = {
   ctx: number
   /** the window its ctx is measured against: 200k, or 1M for a [1m] model */
   window: number
+  /** estimated USD from its requests' tokens at list prices; 0 before the first */
+  usd: number
   /** running | waiting | done | failed */
   state: 'running' | 'waiting' | 'done' | 'failed'
 }
